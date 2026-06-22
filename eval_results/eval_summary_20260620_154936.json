@@ -1,0 +1,58 @@
+{
+  "total_questions": 31,
+  "avg_answer_accuracy": 0.16302276979997385,
+  "avg_answer_relevance": 0.08162014276227252,
+  "avg_faithfulness": 0.6484691383884932,
+  "avg_context_recall": 0.6669674183676213,
+  "avg_retrieval_time_ms": 14457.159434595416,
+  "avg_generation_time_ms": 166776.05369783216,
+  "avg_total_time_ms": 181403.37247233238,
+  "avg_retrieved_count": 5.0,
+  "has_relevant_context_rate": 0.22580645161290322,
+  "success_rate": 0.25806451612903225,
+  "excellent_rate": 0.0,
+  "by_difficulty": {
+    "中等": {
+      "count": 7,
+      "avg_accuracy": 0.23647420576016995,
+      "avg_faithfulness": 0.9434523809523808
+    },
+    "简单": {
+      "count": 15,
+      "avg_accuracy": 0.19461676122747631,
+      "avg_faithfulness": 0.7189393939393939
+    },
+    "复杂": {
+      "count": 2,
+      "avg_accuracy": 0.10638297872340426,
+      "avg_faithfulness": 0.5
+    },
+    "NaN": {
+      "count": 0,
+      "avg_accuracy": NaN,
+      "avg_faithfulness": NaN
+    }
+  },
+  "by_question_type": {
+    "总结归纳": {
+      "count": 5,
+      "avg_accuracy": 0.14038512692218336,
+      "avg_faithfulness": 0.6
+    },
+    "边界测试": {
+      "count": 6,
+      "avg_accuracy": 0.007936507936507936,
+      "avg_faithfulness": 0.16666666666666666
+    },
+    "事实查询": {
+      "count": 15,
+      "avg_accuracy": 0.22462046056095072,
+      "avg_faithfulness": 0.811002886002886
+    },
+    "对比分析": {
+      "count": 5,
+      "avg_accuracy": 0.186970854630993,
+      "avg_faithfulness": 0.7875
+    }
+  }
+}
