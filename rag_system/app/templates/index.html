@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 知识库系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2>&#128218; RAG 知识库</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-tab="chat">
+                    <span class="nav-icon">&#128172;</span> 智能问答
+                </a>
+                <a href="#" class="nav-item" data-tab="documents">
+                    <span class="nav-icon">&#128196;</span> 文档管理
+                </a>
+                <a href="#" class="nav-item" data-tab="settings">
+                    <span class="nav-icon">&#9881;</span> 系统设置
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <span id="sidebarUser"></span>
+                <button class="btn btn-sm btn-outline" onclick="logout()">退出</button>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div class="topbar" id="topbar">
+                <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()">&#9776;</button>
+                <span class="topbar-title" id="topbarTitle">智能问答</span>
+                <span class="topbar-status" id="topbarStatus">就绪</span>
+            </div>
+
+            <!-- 问答面板 -->
+            <div class="tab-panel active" id="tab-chat">
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="chat-welcome">
+                            <h3>&#128075; 你好！我是知识库助手</h3>
+                            <p>请向我提问，我会基于知识库文档为你提供答案。</p>
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <textarea id="questionInput" rows="2" placeholder="输入你的问题... (Enter 发送, Shift+Enter 换行)"
+                                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendQuestion();}"></textarea>
+                        <div class="chat-actions">
+                            <label class="stream-toggle">
+                                <input type="checkbox" id="streamToggle" checked> 流式输出
+                            </label>
+                            <button class="btn btn-primary" id="sendBtn" onclick="sendQuestion()">发送</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 文档管理面板 -->
+            <div class="tab-panel" id="tab-documents">
+                <div class="panel-header">
+                    <h3>文档管理</h3>
+                    <div class="panel-actions">
+                        <button class="btn btn-primary" onclick="document.getElementById('fileUploadInput').click()">
+                            &#128229; 上传文档
+                        </button>
+                        <button class="btn btn-outline" onclick="syncDocuments()">&#128260; 同步目录</button>
+                        <input type="file" id="fileUploadInput" accept=".txt,.pdf,.docx,.doc"
+                               multiple style="display:none" onchange="uploadFiles(this)">
+                    </div>
+                </div>
+
+                <div id="uploadProgress" class="progress-bar" style="display:none;">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+
+                <div class="kb-stats" id="kbStats">
+                    <div class="stat-card">
+                        <div class="stat-value" id="statDocs">-</div>
+                        <div class="stat-label">已索引文件</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="statChunks">-</div>
+                        <div class="stat-label">文本块</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="statVectors">-</div>
+                        <div class="stat-label">向量数</div>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="doc-table" id="docTable">
+                        <thead>
+                            <tr>
+                                <th>文件名</th>
+                                <th>类型</th>
+                                <th>分块数</th>
+                                <th>索引时间</th>
+                                <th>磁盘</th>
+                                <th>校验</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="docTableBody">
+                            <tr><td colspan="7" class="empty-hint">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 设置面板 -->
+            <div class="tab-panel" id="tab-settings">
+                <div class="settings-section">
+                    <h3>修改密码</h3>
+                    <form id="passwordForm" class="settings-form">
+                        <div class="form-group">
+                            <label>旧密码</label>
+                            <input type="password" id="oldPassword" required>
+                        </div>
+                        <div class="form-group">
+                            <label>新密码</label>
+                            <input type="password" id="newPassword" required minlength="4">
+                        </div>
+                        <div class="form-group">
+                            <label>确认新密码</label>
+                            <input type="password" id="confirmPassword" required minlength="4">
+                        </div>
+                        <div id="pwError" class="error-msg" style="display:none;"></div>
+                        <div id="pwSuccess" class="success-msg" style="display:none;"></div>
+                        <button type="submit" class="btn btn-primary">修改密码</button>
+                    </form>
+                </div>
+
+                <div class="settings-section">
+                    <h3>系统信息</h3>
+                    <div class="info-grid" id="sysInfo">
+                        <div class="info-item"><span class="info-label">RAG链状态</span><span id="infoChain">-</span></div>
+                        <div class="info-item"><span class="info-label">向量库状态</span><span id="infoVector">-</span></div>
+                        <div class="info-item"><span class="info-label">重排序</span><span id="infoRerank">-</span></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

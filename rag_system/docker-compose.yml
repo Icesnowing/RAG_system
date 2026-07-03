@@ -1,0 +1,65 @@
+services:
+  rag-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-app
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      # ========== Ollama 连接配置 ==========
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_HOST=http://host.docker.internal:11434
+
+      # ========== 应用配置 ==========
+      - DOCS_DIR=/app/RAG_files
+      - CHROMA_DB_DIR=/app/chroma_db
+      - EMBED_MODEL=nomic-embed-text-v2-moe
+      - CHAT_MODEL=qwen2.5:7b
+
+      # ========== 重排序模型路径（修复：容器内绝对路径） ==========
+      - RERANK_MODEL=/app/models/bge_reranker_base
+
+      # ========== 用户认证配置 ==========
+      - AUTH_DIR=/app/data
+      - JWT_SECRET_KEY=change-me-in-production-use-random-string
+      - JWT_EXPIRE_MINUTES=480
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=admin123
+
+      # ========== 其他配置 ==========
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_KEEP_ALIVE=60m
+
+    volumes:
+      - rag_docs:/app/RAG_files
+      - rag_chroma:/app/chroma_db
+      - rag_models:/root/.cache/huggingface
+      - rag_logs:/app/logs
+      - rag_data:/app/data
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
+    name: rag-network
+
+volumes:
+  rag_docs:
+    name: rag_docs
+  rag_chroma:
+    name: rag_chroma
+  rag_models:
+    name: rag_models
+  rag_logs:
+    name: rag_logs
+  rag_data:
+    name: rag_data

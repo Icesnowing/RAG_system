@@ -1,0 +1,47 @@
+# ============================================================
+# 核心依赖 - 与你的代码保持一致
+# ============================================================
+
+# LangChain 生态
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
+langchain-chroma
+langchain-ollama
+langchain-classic
+langchain-unstructured
+
+# 向量检索 & 重排
+chromadb
+sentence-transformers>=4.0.0
+rank-bm25==0.2.2
+jieba==0.42.1
+numpy==1.26.4
+
+# Web框架
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+
+# 文档处理
+pypdf==5.1.0
+python-docx==1.1.2
+unstructured
+markdown==3.7
+
+# 工具
+tqdm==4.67.1
+pandas==2.2.3
+requests
+python-multipart==0.0.20
+
+# 异步支持
+aiofiles==24.1.0
+httpx==0.28.1
+
+# 认证 (JWT + bcrypt)
+passlib==1.7.4
+python-jose==3.3.0
+bcrypt==4.0.1
+cryptography
