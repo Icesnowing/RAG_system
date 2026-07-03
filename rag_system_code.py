@@ -44,6 +44,7 @@ from sentence_transformers import CrossEncoder
 from rank_bm25 import BM25Okapi
 import numpy as np
 import jieba
+from array import array
 
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -95,12 +96,14 @@ RERANK_TOP_N = 5     # 重排后给LLM的数量（3条通常足够，5条会显�
 CLEAN_DOCS_DIR = '../RAG_files_clean'
 DEFAULT_TEST_SET = 'rag_testsets.csv'
 EVAL_RESULTS_DIR = 'eval_results'
+RERANK_MODEL = "./models/bge-reranker-base"
 
 SIMILARITY_THRESHOLD = 0.3          # 检索相似度阈值：低于该值直接判定为无有效资料
 ENABLE_KEYWORD_AUGMENT = False      # 是否启用关键词增强
 USE_LLM_FOR_KEYWORDS = False       # 是否使用LLM提取关键词（False则使用规则提取）
 KEYWORD_EXTRACTION_MODEL = CHAT_MODEL  # 提取关键词使用的模型
 MAX_KEYWORDS = 8                    # 最多提取多少个关键词
+KEYWORD_MAX_DF_RATIO = 0.3          # 倒排索引高频词剪枝阈值：出现在超过此比例文档中的词跳过
 # 多Query检索配置
 ENABLE_MULTI_QUERY = False           # 是否启用多Query检索
 MULTI_QUERY_NUM = 3                 # 生成的额外Query数量
@@ -450,7 +453,6 @@ class EnterpriseJudge:
         for sent in answer_sentences:
             sent_words = self._tokenize_keywords(sent)
             if not sent_words:
-                supported += 1
                 continue
 
             # Step1: 关键词Jaccard（阈值从0.3提升到0.5）
@@ -909,7 +911,7 @@ class LocalRAGSystem:
     @property
     def chat_model(self):
         if self._chat_model is None:
-            self._chat_model = self._create_chat_model(streaming=CHAT_STREAMING)
+            self._chat_model = self._create_chat_model()
         return self._chat_model
 
     def _create_chat_model(self, streaming: bool = True):
@@ -939,7 +941,7 @@ class LocalRAGSystem:
             except ImportError:
                 device = "cpu"
             self._rerank_model = CrossEncoder(
-                "./models/bge-reranker-base", device=device
+                RERANK_MODEL, device=device
             )
         return self._rerank_model
     
@@ -1342,15 +1344,72 @@ class LocalRAGSystem:
         self._bm25_index = BM25Okapi(tokenized_docs)
 
     def _build_keyword_index(self):
-        """构建倒排关键词索引"""
-        self._keyword_index = {}
+        """
+        构建倒排关键词索引。
+        优化：高频词剪枝（出现在>30%文档中的词不建索引）+ array('I') 替代 set 压缩内存。
+        """
+        self._keyword_index: dict[str, array] = {}
+        doc_count = len(self.chunks)
+        if doc_count == 0:
+            return
+
+        # 第一遍：统计词频（document frequency）
+        word_df: dict[str, int] = {}
         for idx, doc in enumerate(self.chunks):
             words = set(jieba.cut(doc.page_content.strip()))
             words = {w for w in words if w not in self._stopwords and len(w) > 1}
             for word in words:
+                word_df[word] = word_df.get(word, 0) + 1
+
+        # 第二遍：跳过高频词建索引，用 array('I') 存储 postings
+        threshold = int(doc_count * KEYWORD_MAX_DF_RATIO)
+        pruned_count = 0
+        for idx, doc in enumerate(self.chunks):
+            words = set(jieba.cut(doc.page_content.strip()))
+            words = {w for w in words if w not in self._stopwords and len(w) > 1}
+            for word in words:
+                df = word_df.get(word, 0)
+                if df > threshold:
+                    pruned_count += 1
+                    continue
                 if word not in self._keyword_index:
-                    self._keyword_index[word] = set()
-                self._keyword_index[word].add(idx)
+                    self._keyword_index[word] = array('I')
+                self._keyword_index[word].append(idx)
+
+        print(f"倒排索引构建完成: {len(self._keyword_index)} 个词, 剪枝 {pruned_count} 个高频词posting")
+
+    def _add_to_keyword_index(self, chunks: list, start_idx: int):
+        """增量添加 chunk 到倒排索引（避免全量重建）"""
+        if self._keyword_index is None:
+            self._build_keyword_index()
+            return
+        doc_count = len(self.chunks)
+        threshold = int(doc_count * KEYWORD_MAX_DF_RATIO) if doc_count > 0 else 0
+        for i, chunk in enumerate(chunks):
+            idx = start_idx + i
+            words = set(jieba.cut(chunk.page_content.strip()))
+            words = {w for w in words if w not in self._stopwords and len(w) > 1}
+            # 简易高频检测：已存在的 postings 长度 > threshold 也跳过
+            for word in words:
+                existing_len = len(self._keyword_index.get(word, []))
+                if existing_len > threshold:
+                    continue
+                if word not in self._keyword_index:
+                    self._keyword_index[word] = array('I')
+                self._keyword_index[word].append(idx)
+
+    def _remove_from_keyword_index(self, chunk_indices: set):
+        """从倒排索引中增量移除指定 chunk 的 postings"""
+        if self._keyword_index is None:
+            return
+        for word in list(self._keyword_index.keys()):
+            postings = self._keyword_index[word]
+            new_postings = array('I', (idx for idx in postings if idx not in chunk_indices))
+            if len(new_postings) == 0:
+                del self._keyword_index[word]
+            else:
+                self._keyword_index[word] = new_postings
+
     # ================== 文档压缩（LLM抽取式） ==================
     def _compress_document(self, document: LangchainDocument, query: str) -> LangchainDocument:
         """
@@ -2175,11 +2234,20 @@ class LocalRAGSystem:
         for i, chunk in enumerate(self.chunks):
             chunk.metadata["chunk_index"] = i
 
-    def _rebuild_indices(self) -> None:
-        """重建BM25和关键词倒排索引（文档变更后调用）"""
+    def _rebuild_indices(self, add_chunks=None, add_start_idx=0, remove_indices=None) -> None:
+        """
+        重建检索索引。
+        - BM25 库不支持增量，始终全量重建
+        - 倒排索引优先走增量路径（add_chunks / remove_indices），否则全量重建
+        """
         if self.chunks:
             self._build_bm25_index()
-            self._build_keyword_index()
+            if add_chunks is not None:
+                self._add_to_keyword_index(add_chunks, add_start_idx)
+            elif remove_indices is not None:
+                self._remove_from_keyword_index(remove_indices)
+            else:
+                self._build_keyword_index()
         else:
             self._bm25_index = None
             self._keyword_index = {}
@@ -2301,7 +2369,7 @@ class LocalRAGSystem:
         ))
         self._manifest.save()
 
-        self._rebuild_indices()
+        self._rebuild_indices(add_chunks=chunks, add_start_idx=current_max_idx)
 
         print(f"文档已添加: {os.path.basename(file_path)} ({len(chunks)} chunks)")
         return True
@@ -2337,7 +2405,7 @@ class LocalRAGSystem:
         self._manifest.save()
 
         self._reload_chunks_from_vectorstore()
-        self._rebuild_indices()
+        self._rebuild_indices()  # 全量重建：chunk索引移除后全部偏移，无安全增量路径
 
         print(f"文档已移除: {os.path.basename(file_path)} ({chunk_count} chunks)")
         return True
@@ -2430,7 +2498,7 @@ class LocalRAGSystem:
               f"失败{stats['errors']}")
 
         self._reload_chunks_from_vectorstore()
-        self._rebuild_indices()
+        self._rebuild_indices()  # 批量同步后全量重建，确保一致性
 
         return stats
 
@@ -2562,8 +2630,8 @@ class LocalRAGSystem:
                     print(f"批量添加失败 {fp}: {e}")
                     stats['errors'] += 1
 
-            self._reload_chunks_from_vectorstore()
-            self._rebuild_indices()
+        self._reload_chunks_from_vectorstore()
+        self._rebuild_indices()  # 批量操作后统一全量重建，避免多次重复构建
 
         print(f"\n批量添加完成: 成功{stats['added']}, 跳过{stats['skipped']}, 失败{stats['errors']}")
         return stats
