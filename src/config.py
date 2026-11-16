@@ -40,8 +40,8 @@ def retry_on_failure(max_retries: int = 2, delay: float = 1.0, fallback_value=No
 
 
 #==========配置项============
-DOCS_DIR = '../RAG_files'   #文档目录
-CHROMA_DB_DIR = '../chroma_db'   #向量数据库目录
+DOCS_DIR = './RAG_files'   #文档目录（项目根目录下的 RAG_files）
+CHROMA_DB_DIR = './chroma_db'   #向量数据库目录
 MANIFEST_PATH = os.path.join(CHROMA_DB_DIR, 'document_manifest.json')  #文档清单文件
 EMBED_MODEL = 'nomic-embed-text-v2-moe'
 CHAT_MODEL = 'qwen2.5:7b'
@@ -49,7 +49,7 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 TOP_K = 10
 RERANK_TOP_N = 5     # 重排后给LLM的数量（3条通常足够，5条会显著增加生成耗时）
-CLEAN_DOCS_DIR = '../RAG_files_clean'
+CLEAN_DOCS_DIR = './RAG_files_clean'
 DEFAULT_TEST_SET = 'rag_testsets.csv'
 EVAL_RESULTS_DIR = 'eval_results'
 RERANK_MODEL = "./models/bge-reranker-base"

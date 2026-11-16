@@ -5,6 +5,7 @@
 以 Mixin 形式提供给主系统类使用，方法实现与原文件保持一致。
 """
 
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -22,6 +23,11 @@ from docx import Document
 from langchain_core.documents import Document as LangchainDocument
 
 from config import DOCS_DIR, CHUNK_SIZE, CHUNK_OVERLAP, MAX_WORKERS
+
+
+def make_chunk_id(filename: str, text: str) -> str:
+    """稳定 chunk ID：md5(文件名 + 文本) 的前 12 位，只依赖文件名和内容。"""
+    return hashlib.md5(f"{filename}::{text}".encode("utf-8")).hexdigest()[:12]
 
 
 class DocumentProcessMixin:
@@ -115,9 +121,34 @@ class DocumentProcessMixin:
 
         return docs
 
+    def _load_markdown(self, md_path: str) -> List[LangchainDocument]:
+        """
+        加载 Markdown 文档，保留标题标记。
+        切分阶段与 Word 相同：先按 # / ## / ### 分层，再按长度递归切分。
+        """
+        try:
+            loader = TextLoader(str(md_path), encoding='utf-8')
+            loaded = loader.load()
+        except Exception as e:
+            return [LangchainDocument(
+                page_content=f"[加载失败] {md_path}: {str(e)}",
+                metadata={"source": str(md_path), "load_error": True, "file_type": "markdown"}
+            )]
+
+        if not loaded:
+            return [LangchainDocument(
+                page_content=f"[Markdown加载失败] {os.path.basename(md_path)}",
+                metadata={"source": str(md_path), "load_error": True, "file_type": "markdown"}
+            )]
+
+        for doc in loaded:
+            doc.metadata["source"] = str(md_path)
+            doc.metadata["file_type"] = "markdown"
+        return loaded
+
     def _load_documents(self) -> List[LangchainDocument]:
         """
-        [OPT-06] 并行加载目录下所有文档（txt/pdf/docx/doc）
+        [OPT-06] 并行加载目录下所有文档（txt/pdf/docx/doc/md）
         原理：文档加载是I/O密集型操作，并行加载可大幅减少启动时间。
         """
         docs: List[LangchainDocument] = []
@@ -133,13 +164,18 @@ class DocumentProcessMixin:
         pdf_files = list(docs_path.glob('*.pdf'))
         docx_files = list(docs_path.glob('*.docx'))
         doc_files = list(docs_path.glob('*.doc'))
-        all_files = txt_files + pdf_files + docx_files + doc_files
+        md_files = list(docs_path.glob('*.md')) + list(docs_path.glob('*.markdown'))
+        all_files = txt_files + pdf_files + docx_files + doc_files + md_files
 
         if not all_files:
             print(f"目录 {DOCS_DIR} 下未找到文档")
             return []
 
-        print(f"发现 {len(all_files)} 个文档文件 (txt:{len(txt_files)} pdf:{len(pdf_files)} docx/doc:{len(docx_files)+len(doc_files)})")
+        print(
+            f"发现 {len(all_files)} 个文档文件 "
+            f"(txt:{len(txt_files)} pdf:{len(pdf_files)} "
+            f"docx/doc:{len(docx_files)+len(doc_files)} md:{len(md_files)})"
+        )
 
         # [OPT-06] 并行加载
         def load_single_file(file_path: Path):
@@ -156,6 +192,9 @@ class DocumentProcessMixin:
                 elif ext in ('.docx', '.doc'):
                     doc = self._load_docx_with_heading(str(file_path))
                     return [doc]
+
+                elif ext in ('.md', '.markdown'):
+                    return self._load_markdown(str(file_path))
 
             except Exception as e:
                 return [LangchainDocument(
@@ -185,11 +224,15 @@ class DocumentProcessMixin:
 
         原版bug：if/elif逻辑导致只有.docx被切分，.txt和.pdf加载后直接丢弃。
         修复：统一使用RecursiveCharacterTextSplitter对所有文档切分，
-              .docx额外经过MarkdownHeaderTextSplitter保留章节结构。
+              .docx 与 .md 额外经过MarkdownHeaderTextSplitter保留章节结构。
 
         原理：文本切分是向量化和检索的基础，未经切分的文档无法进入向量库。
         """
         final_chunks: List[LangchainDocument] = []
+        chunk_records: list = []
+        seen_ids: set = set()
+        doc_chunk_index: dict = {}
+        duplicate_count = 0
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
@@ -202,8 +245,8 @@ class DocumentProcessMixin:
             if len(content.strip()) < 5:
                 continue
 
-            # [OPT-01] .docx 额外经过标题分层切分
-            if file_name.endswith(('.docx', '.doc')):
+            # [OPT-01] .docx / .md 额外经过标题分层切分（逻辑相同）
+            if file_name.endswith(('.docx', '.doc', '.md', '.markdown')):
                 try:
                     headers_to_split_on = [
                         ("#", "H1"),
@@ -223,14 +266,37 @@ class DocumentProcessMixin:
                 # [OPT-01] txt/pdf 统一切分
                 chunks = splitter.split_documents([doc])
 
-            # 补充源文件元数据
+            # 补充源文件元数据，并按稳定 ID 去重后登记
             for chunk in chunks:
                 if "source" not in chunk.metadata:
                     chunk.metadata["source"] = doc.metadata.get("source", file_name)
                 if "file_type" not in chunk.metadata:
                     chunk.metadata["file_type"] = doc.metadata.get("file_type", "unknown")
 
-            final_chunks.extend(chunks)
+                idx = doc_chunk_index.get(file_name, 0)
+                doc_chunk_index[file_name] = idx + 1
+                text = (chunk.page_content or "").strip()
+                if not text:
+                    continue
 
-        print(f"文本切分完成，共 {len(final_chunks)} 个文本块")
+                cid = make_chunk_id(file_name, text)
+                if cid in seen_ids:
+                    duplicate_count += 1
+                    continue
+                seen_ids.add(cid)
+
+                chunk.page_content = text
+                chunk.metadata["chunk_id"] = cid
+                chunk.metadata["index_in_doc"] = idx
+                chunk_records.append({
+                    "chunk_id": cid, "source": file_name,
+                    "index_in_doc": idx, "text": text,
+                })
+                final_chunks.append(chunk)
+
+        self.chunk_records = chunk_records
+        print(
+            f"文本切分完成，共 {len(final_chunks)} 个文本块"
+            f"（去除重复 {duplicate_count} 个）"
+        )
         return final_chunks

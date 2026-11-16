@@ -133,8 +133,10 @@ class VectorDBMixin:
 
         print(f"正在向量化 {len(self.chunks)} 个文本块...")
         try:
+            self.embeddings.embed_query("warmup")
             self.vector_store = Chroma.from_documents(
                 documents=self.chunks,
+                ids=[chunk.metadata["chunk_id"] for chunk in self.chunks],
                 persist_directory=CHROMA_DB_DIR,
                 embedding=self.embeddings,
                 collection_name='knowledge_base',

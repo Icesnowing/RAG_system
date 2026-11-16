@@ -19,6 +19,7 @@ from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document as LangchainDocument
 
 from config import DOCS_DIR
+from process_files import make_chunk_id
 
 
 # ================== 文档清单管理 ==================
@@ -215,7 +216,10 @@ class DocumentManagementMixin:
                 except OSError:
                     pass
 
-            chunk_ids = [f"{file_path}#chunk_{idx}" for idx in chunk_indices]
+            chunk_ids = [
+                self.chunks[idx].metadata.get("chunk_id", f"{file_path}#chunk_{idx}")
+                for idx in chunk_indices
+            ]
             self._manifest.add_record(DocumentRecord(
                 file_path=file_path,
                 file_hash=file_hash,
@@ -234,7 +238,7 @@ class DocumentManagementMixin:
         """
         企业级文档添加：
         1. 检测文件有效性
-        2. 加载文档（支持txt/pdf/docx/doc）
+        2. 加载文档（支持txt/pdf/docx/doc/md）
         3. 切分为chunks，生成确定性ID
         4. 写入向量库
         5. 更新chunks列表和清单
@@ -271,6 +275,8 @@ class DocumentManagementMixin:
             elif ext in ('.docx', '.doc'):
                 doc = self._load_docx_with_heading(file_path)
                 raw_docs = [doc]
+            elif ext in ('.md', '.markdown'):
+                raw_docs = self._load_markdown(file_path)
             else:
                 print(f"不支持的文件类型: {ext}")
                 return False
@@ -290,7 +296,10 @@ class DocumentManagementMixin:
         current_max_idx = len(self.chunks)
         chunk_ids = []
         for i, chunk in enumerate(chunks):
-            chunk_id = f"{file_path}#chunk_{current_max_idx + i}"
+            chunk_id = chunk.metadata.get("chunk_id") or make_chunk_id(
+                os.path.basename(file_path), (chunk.page_content or "").strip()
+            )
+            chunk.metadata["chunk_id"] = chunk_id
             chunk_ids.append(chunk_id)
             chunk.metadata["source"] = file_path
             chunk.metadata["chunk_index"] = current_max_idx + i
@@ -396,7 +405,7 @@ class DocumentManagementMixin:
 
         with self._mutation_lock:
             current_files = set()
-            for ext in ('*.txt', '*.pdf', '*.docx', '*.doc'):
+            for ext in ('*.txt', '*.pdf', '*.docx', '*.doc', '*.md', '*.markdown'):
                 for f in docs_path.glob(ext):
                     current_files.add(str(f.resolve()))
 
@@ -504,7 +513,7 @@ class DocumentManagementMixin:
                         continue
 
                     current_state = {}
-                    for ext in ('*.txt', '*.pdf', '*.docx', '*.doc'):
+                    for ext in ('*.txt', '*.pdf', '*.docx', '*.doc', '*.md', '*.markdown'):
                         for f in docs_path.glob(ext):
                             fp = str(f.resolve())
                             try:

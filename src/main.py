@@ -46,6 +46,53 @@ from config import (
     DEFAULT_TEST_SET,
 )
 
+class StableOllamaEmbeddings(OllamaEmbeddings):
+    """按小批量调用 Ollama 嵌入，并在模型进程短暂退出时重试。
+
+    nomic-embed-text-v2-moe 的 /tokenize 由临时端口上的 runner 提供。
+    一次送入数千条文本时 runner 容易退出，随后返回 connection refused。
+    """
+
+    embed_batch_size: int = 16
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        batch_size = max(1, self.embed_batch_size)
+        if len(texts) <= batch_size:
+            return self._embed_with_retry(texts)
+
+        vectors: list[list[float]] = []
+        total = len(texts)
+        for start in range(0, total, batch_size):
+            batch = texts[start:start + batch_size]
+            print(f"  嵌入进度 {min(start + batch_size, total)}/{total}")
+            vectors.extend(self._embed_with_retry(batch))
+        return vectors
+
+    def _embed_with_retry(self, texts: list[str]) -> list[list[float]]:
+        delay = 1.0
+        last_error: Exception | None = None
+        for attempt in range(4):
+            try:
+                return super().embed_documents(texts)
+            except Exception as exc:
+                last_error = exc
+                if attempt == 3 or not _is_embed_runner_error(exc):
+                    break
+                time.sleep(delay)
+                delay *= 2
+        assert last_error is not None
+        raise last_error
+
+
+def _is_embed_runner_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(token in message for token in (
+        "tokenize", "refused", "connection", "eof", "status code: 500",
+    ))
+
+
 from process_files import DocumentProcessMixin
 from build_db import VectorDBMixin
 from preprocess_query import QueryPreprocessMixin
@@ -73,6 +120,7 @@ class LocalRAGSystem(
         self.vector_store = None
         self.rag_chain = None
         self.chunks: List[LangchainDocument] = []
+        self.chunk_records: list = []
         self._bm25_index = None
         self._keyword_index = None
         self._stopwords: Set[str] = set()
@@ -85,8 +133,8 @@ class LocalRAGSystem(
     @property
     def embeddings(self):
         if self._embeddings is None:
-            self._embeddings = OllamaEmbeddings(
-            model=EMBED_MODEL
+            self._embeddings = StableOllamaEmbeddings(
+                model=EMBED_MODEL,
             )
         return self._embeddings
 
